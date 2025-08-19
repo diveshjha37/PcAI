@@ -38,7 +38,7 @@ opened_apps = {}
 def init_tts_engine():
     """Initialize text-to-speech engine with better voice selection"""
     engine = pyttsx3.init()
-    engine.setProperty('rate', 230)
+    engine.setProperty('rate', 232)
     engine.setProperty('volume', 1.0)
     
     voices = engine.getProperty('voices')
@@ -283,7 +283,7 @@ def get_weather(city=None):
         params = {
             "latitude": lat,
             "longitude": lon,
-            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation,precipitation_probability",
             "temperature_unit": "celsius" if units == "metric" else "fahrenheit",
             "wind_speed_unit": "kmh" if units == "metric" else "mph",
             "timezone": "auto"
@@ -301,6 +301,8 @@ def get_weather(city=None):
         apparent_temp = current["apparent_temperature"]
         wind_speed = current["wind_speed_10m"]
         weather_code = current["weather_code"]
+        precipitation = current["precipitation"]
+        precipitation_probability = current.get("precipitation_probability", "unknown")
         
         # Map weather codes to descriptions
         weather_descriptions = {
@@ -320,10 +322,29 @@ def get_weather(city=None):
         
         return (f"Weather in {city_name}: {description}, temperature {temp}{unit_symbol} "
                 f"(feels like {apparent_temp}{unit_symbol}), humidity {humidity}%, "
-                f"wind speed {wind_speed} {wind_unit}")
+                f"wind speed {wind_speed} {wind_unit}, precipitation {precipitation} mm in last hour, "
+                f"rain probability {precipitation_probability}%")
     
     except Exception as e:
         return f"Sorry, I couldn't get weather information. Error: {str(e)}"
+
+def ask_for_weather():
+    """Ask if user wants weather info and proceed accordingly."""
+    speak("Do you want to know the current weather for a specific city, town, or country? Say yes or no.")
+    response = listen_to_command()
+    if response and "yes" in response:
+        speak("For which city, town, or country?")
+        city_response = listen_to_command()
+        if city_response:
+            weather_info = get_weather(city_response)
+            speak(weather_info)
+            return weather_info
+        else:
+            speak("Sorry, I didn't catch the location.")
+            return "Location not understood."
+    else:
+        speak("Okay, skipping weather info.")
+        return "Skipped weather request."
 
 # =========================
 # Calculator helper
@@ -577,19 +598,20 @@ def list_available_commands():
         "hello agent", "are you ready",
         "how are you doing / okay baby / baby / wake up / how is your battery",
         "help",
-        "what time is it", "what is today's date",
+        "what time is it / what's time now / time is it",
+        "what is today's date",
         "tell me a joke",
         "open youtube", "open google",
         "open downloads", "open documents", "open desktop",
         "open chrome", "close chrome",
         "open firefox", "close firefox",
-        "increase volume", "decrease volume", "mute volume", "unmute volume",
+        "increase volume", "decrease volume", "mute volume / mute / stop talking", "unmute volume / unmute / start talking",
         "translate <text> to hindi",
         "set timer for <number> minutes",
         "search for <query>",
         "take a note <text>",
         "show calendar [for <month> [<year>]]",
-        "what's the weather [in <city>]",
+        "what's the weather [in <city>] / weather / rain / temperature",
         "calculate <expression>",
         "disk usage [for <path>]",
         "find files <pattern> [in <path>]",
@@ -643,8 +665,10 @@ command_mapping = {
     "how is your battery": "check_battery_status",
     "help": "help",
     "what time is it": "tell_time",
-    "what's the time": "tell_time",
-    "whats the time": "tell_time",
+    "what's time now": "tell_time",
+    "time is it": "tell_time",
+    "what is the time": "tell_time",
+    "tell me the time": "tell_time",
     "today": "tell_date",
     "tell me a joke": "tell_joke",
     "joke": "tell_joke",
@@ -660,13 +684,20 @@ command_mapping = {
     "increase volume": "increase_volume",
     "decrease volume": "decrease_volume",
     "mute volume": "mute_volume",
+    "mute": "mute_volume",
+    "stop talking": "mute_volume",
     "unmute volume": "unmute_volume",
+    "unmute": "unmute_volume",
+    "start talking": "unmute_volume",
     "translate": "translate_to_hindi",
     "set timer for": "set_timer",
     "search for": "search_web",
     "take a note": "take_note",
     "show calendar": "show_calendar",
     "weather": "get_weather",
+    "what is the weather": "get_weather",
+    "rain": "get_weather",
+    "temperature": "get_weather",
     "calculate": "calculate",
     "disk usage": "disk_usage",
     "find files": "find_files",
@@ -692,6 +723,15 @@ def interpret_command(command):
             if key == "today" and "date" not in command:
                 continue
             return action, command
+    return None, None
+
+def handle_fallback(command):
+    """Fallback for basic prediction if no exact match."""
+    if any(word in command for word in ['time', 'clock', 'hour']):
+        return "tell_time", command
+    elif any(word in command for word in ['weather', 'rain', 'temperature', 'forecast', 'sunny', 'cloudy']):
+        return "ask_weather", command
+    # Add more fallbacks if needed
     return None, None
 
 # =========================
@@ -1004,7 +1044,7 @@ def execute_command(action, command):
 
     elif action == "unmute_volume":
         if os_name == "Darwin":
-            os.system("osascript -e 'set volume output muted false'")
+            os.system("osascript -e 'set volume with output muted false'")
             response = "Volume unmuted."
             speak(response)
         else:
@@ -1080,6 +1120,9 @@ def execute_command(action, command):
             city = None
         response = get_weather(city)
         speak(response)
+
+    elif action == "ask_weather":
+        response = ask_for_weather()
 
     elif action == "calculate":
         if "calculate" in command:
@@ -1223,13 +1266,15 @@ if __name__ == "__main__":
     load_memory()
     load_config()
     
-    speak("Voice agent initialized and ready!")
+    # speak("Voice agent initialized and ready!")
     
     while True:
         try:
             command = listen_to_command()
             if command:
                 action, full_command = interpret_command(command)
+                if not action:
+                    action, full_command = handle_fallback(command)
                 if action:
                     execute_command(action, full_command)
                 else:
