@@ -9,6 +9,8 @@ import webbrowser
 import random
 import shutil
 import time
+import threading
+from deep_translator import GoogleTranslator
 
 # =========================
 # Speech: Initialize engine once, prioritize Samantha
@@ -18,10 +20,10 @@ engine.setProperty('rate', 235)  # Keep your preferred rate
 engine.setProperty('volume', 1.0)
 
 voices = engine.getProperty('voices')
-preferred_names = ["samantha", "alex"]  # Prioritize Samantha, then Ava
+preferred_names = ["samantha", "ava"]  # Prioritize Samantha, then Ava
 picked = False
 for v in voices:
-    if "alex" in v.name.lower():
+    if "samantha" in v.name.lower():
         engine.setProperty('voice', v.id)
         picked = True
         break
@@ -48,7 +50,7 @@ recognizer = sr.Recognizer()
 def listen_to_command():
     with sr.Microphone() as source:
         print("Listening...")
-        recognizer.adjust_for_ambient_noise(source, duration=0.2)  # Faster adjustment
+        recognizer.adjust_for_ambient_noise(source, duration=0.2)
         try:
             audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
             command = recognizer.recognize_google(audio)
@@ -96,6 +98,25 @@ def describe_battery_health(percentage, is_charging):
             return f"I'm running low at {percentage}% — I really need a charge soon."
 
 # =========================
+# Timer helper
+# =========================
+def set_timer(minutes):
+    def timer_callback():
+        speak(f"Timer for {minutes} minute{'s' if minutes != 1 else ''} is up!")
+    threading.Timer(minutes * 60, timer_callback).start()
+    speak(f"Timer set for {minutes} minute{'s' if minutes != 1 else ''}.")
+
+# =========================
+# Note-taking helper
+# =========================
+def take_note(text):
+    notes_file = os.path.expanduser("~/Documents/agent_notes.txt")
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(notes_file, "a") as f:
+        f.write(f"[{timestamp}] {text}\n")
+    speak(f"Note saved: {text}")
+
+# =========================
 # Help / discoverability
 # =========================
 def list_available_commands():
@@ -118,6 +139,10 @@ def list_available_commands():
         "open chrome", "close chrome",
         "open firefox", "close firefox",
         "increase volume", "decrease volume", "mute volume", "unmute volume",
+        "translate <text> to hindi",
+        "set timer for <number> minutes",
+        "search for <query>",
+        "take a note <text>",
     ]
 
 # =========================
@@ -158,7 +183,7 @@ command_mapping = {
     "what time is it": "tell_time",
     "what's the time": "tell_time",
     "whats the time": "tell_time",
-    "today": "tell_date",  # Partial match, refined in function
+    "today": "tell_date",
     "tell me a joke": "tell_joke",
     "joke": "tell_joke",
     "open youtube": "open_youtube",
@@ -174,28 +199,30 @@ command_mapping = {
     "decrease volume": "decrease_volume",
     "mute volume": "mute_volume",
     "unmute volume": "unmute_volume",
+    "translate": "translate_to_hindi",
+    "set timer for": "set_timer",
+    "search for": "search_web",
+    "take a note": "take_note",
 }
 
 def interpret_command(command):
     if not command:
         return None
-    # Check for exact or partial matches in the command mapping
     for key, action in command_mapping.items():
         if key in command:
-            # Special case for "today" to ensure it’s date-related
             if key == "today" and "date" not in command:
                 continue
-            return action
-    return None
+            return action, command
+    return None, None
 
 # =========================
 # Execute commands
 # =========================
-def execute_command(action):
+def execute_command(action, command):
     os_name = platform.system()
 
     if action == "greet":
-        speak("Yeah, go ahead and ask questions. I can help with things like opening apps, playing music, checking battery, and more!")
+        speak("Yeah, go ahead and ask questions. I can help with things like opening apps, playing music, translating to Hindi, setting timers, and more!")
 
     elif action == "check_battery_status":
         battery_percentage, is_charging = get_battery_status()
@@ -205,18 +232,21 @@ def execute_command(action):
     elif action == "logout":
         if os_name == "Darwin":
             subprocess.run(["osascript", "-e", 'tell app "System Events" to log out'], check=True)
+            speak("Logging out.")
         else:
             print("Command not applicable to this OS.")
 
     elif action == "shutdown":
         if os_name == "Darwin":
             subprocess.run(["osascript", "-e", 'tell app "Finder" to shut down'], check=True)
+            speak("Shutting down.")
         else:
             print("Command not applicable to this OS.")
 
     elif action == "restart":
         if os_name == "Darwin":
             subprocess.run(["osascript", "-e", 'tell app "Finder" to restart'], check=True)
+            speak("Restarting.")
         else:
             print("Command not applicable to this OS.")
 
@@ -438,6 +468,49 @@ def execute_command(action):
         else:
             print("Command not applicable to this OS.")
 
+    elif action == "translate_to_hindi":
+        if "translate" in command and "to hindi" in command:
+            text_to_translate = command.split("translate")[1].split("to hindi")[0].strip()
+            if text_to_translate:
+                try:
+                    translator = GoogleTranslator(source='en', target='hi')
+                    translated_text = translator.translate(text_to_translate)
+                    speak(f"The translation of '{text_to_translate}' to Hindi is: {translated_text}")
+                    print(f"Translation: {translated_text}")
+                except Exception as e:
+                    speak("Sorry, I couldn't translate that. Please check your internet connection.")
+                    print(f"Translation error: {e}")
+            else:
+                speak("Please provide text to translate to Hindi.")
+        else:
+            speak("Please say 'translate <text> to Hindi' to use the translation feature.")
+
+    elif action == "set_timer":
+        try:
+            minutes_str = command.split("set timer for")[1].split("minute")[0].strip()
+            minutes = float(minutes_str)
+            if minutes > 0:
+                set_timer(minutes)
+            else:
+                speak("Please specify a positive number of minutes for the timer.")
+        except (ValueError, IndexError):
+            speak("Please say 'set timer for <number> minutes' to set a timer.")
+
+    elif action == "search_web":
+        query = command.split("search for")[1].strip() if "search for" in command else ""
+        if query:
+            webbrowser.open(f"https://www.google.com/search?q={query.replace(' ', '+')}")
+            speak(f"Searching for {query}.")
+        else:
+            speak("Please provide a search query.")
+
+    elif action == "take_note":
+        note_text = command.split("take a note")[1].strip() if "take a note" in command else ""
+        if note_text:
+            take_note(note_text)
+        else:
+            speak("Please provide text for the note.")
+
     else:
         print("Command not recognized or supported on this operating system.")
 
@@ -449,12 +522,12 @@ if __name__ == "__main__":
         try:
             command = listen_to_command()
             if command:
-                action = interpret_command(command)
+                action, full_command = interpret_command(command)
                 if action:
-                    execute_command(action)
+                    execute_command(action, full_command)
                 else:
                     commands = list_available_commands()
-                    speak("Hey, hey baby — try different words. check what I can do from the list below:")
+                    speak("Hey, hey baby — try different words. I can help with things like: " + ", ".join(commands))
                     for cmd in commands:
                         print(f"- {cmd}")
             time.sleep(0.1)  # Prevent excessive CPU usage
